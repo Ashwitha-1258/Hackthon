@@ -1,0 +1,107 @@
+# ============================================================
+# EchoVerse Chatbot – Single Cell Full Project
+# Features:
+# 1. Chatbot (Granite 3.3 2B)
+# 2. Language translation (Indian & others)
+# 3. Image analysis (BLIP)
+# ============================================================
+
+# -----------------------------
+# 1. INSTALL REQUIRED LIBRARIES
+# -----------------------------
+!pip uninstall -y transformers
+!pip install --upgrade git+https://github.com/huggingface/transformers.git --quiet
+!pip install accelerate safetensors sentencepiece --quiet
+!pip install torch torchaudio torchvision --quiet
+!pip install gradio pillow --quiet
+
+import torch
+import gradio as gr
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from PIL import Image
+
+# -----------------------------
+# 2. LOAD GRANITE 3.3 2B INSTRUCT
+# -----------------------------
+MODEL_NAME = "ibm-granite/granite-3.3-2b-instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(
+    MODEL_NAME,
+    trust_remote_code=True,
+    use_fast=False
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+)
+
+# -----------------------------
+# 3. CHATBOT / TRANSLATION FUNCTION
+# -----------------------------
+def granite_chat(messages):
+    prompt = ""
+    for m in messages:
+        prompt += f"{m['role'].upper()}: {m['content']}\n"
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    outputs = model.generate(**inputs, max_new_tokens=300, do_sample=True, temperature=0.7)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# -----------------------------
+# 4. IMAGE ANALYSIS FUNCTION
+# -----------------------------
+vision = pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
+
+def analyze_image(img):
+    if img is None:
+        return "No image uploaded."
+    return vision(img)[0]["generated_text"]
+
+# -----------------------------
+# 5. GRADIO INTERFACE FUNCTION
+# -----------------------------
+chat_history = []
+
+def process(user_input, task, target_language, img):
+    global chat_history
+    # Build prompt based on task
+    if task == "Chatbot":
+        chat_history.append({"role": "user", "content": user_input})
+        response = granite_chat(chat_history)
+        chat_history.append({"role": "assistant", "content": response})
+        return response, ""
+    elif task == "Translate Text":
+        prompt = f"Translate the following text to {target_language}:\n{user_input}"
+        response = granite_chat([{"role":"user","content":prompt}])
+        return response, ""
+    elif task == "Image Analysis":
+        caption = analyze_image(img)
+        return caption, ""
+    else:
+        return "Invalid task.", ""
+
+# -----------------------------
+# 6. CREATE GRADIO UI
+# -----------------------------
+tasks = ["Chatbot", "Translate Text", "Image Analysis"]
+languages = ["English", "Hindi", "Tamil", "Telugu", "Bengali", "Marathi", "Gujarati", "Spanish", "French", "German", "Chinese"]
+
+ui = gr.Interface(
+    fn=process,
+    title="EchoVerse Chatbot",
+    description="A multi-feature AI assistant: Chatbot, Language Translation, Image Analysis",
+    inputs=[
+        gr.Textbox(lines=5, label="Input Text"),
+        gr.Dropdown(tasks, label="Select Task"),
+        gr.Dropdown(languages, label="Target Language (for Translation)"),
+        gr.Image(type="pil", label="Upload Image (for Image Analysis)")
+    ],
+    outputs=[
+        gr.Textbox(label="Output"),
+        gr.Textbox(label="(Debug / Unused)")
+    ]
+)
+
+ui.launch(debug=True)
